@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-user WebSocket App</title>
+    <link
+      rel="stylesheet"
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+    />
+  </head>
+  <body>
+    <div id="container" class="container mt-2" style="position: relative">
+      <div id="log_in" class="input-group">
+        <input
+          style="display: none"
+          type="text"
+          id="nickname"
+          class="form-control"
+          placeholder="Enter nickname"
+        />
+        <button style="display: none" id="join" class="btn btn-outline-success">
+          Join
+        </button>
+
+        <a id="next-button" style="display: none">End turn</a>
+      </div>
+
+      <div id="log_out"></div>
+
+      <div id="users" class="container mt-2">
+        <h5>Online Users:</h5>
+        <div class="row">
+          <!-- Здесь будут добавляться карточки пользователей динамически -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Нижний контейнер с абсолютным позиционированием -->
+    <div
+      class="d-flex flex-column"
+      style="position: absolute; bottom: 10px; right: 10px"
+    >
+      <button title="Refresh panel data" id="refresh" class="btn btn-outline-primary mb-2" onclick="location.reload()">
+        <i class="fa-solid fa-rotate"></i>
+      </button>
+      <button title="Delete all users" id="clear-users" class="btn btn-outline-danger">
+        <i class="fa-solid fa-user-xmark"></i>
+      </button>
+    </div>
+
+    <script src="https://kit.fontawesome.com/794acf4cc4.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+      const socket = io();
+      let userId = localStorage.getItem("userId");
+
+      // Проверяем, есть ли у нас userId в localStorage
+      if (!userId) {
+        // Если нет, создаем новый userId и сохраняем в localStorage
+        userId = Date.now().toString();
+        localStorage.setItem("userId", userId);
+      }
+
+      function show_or_hide_log_in() {
+        // Проверяем, существует ли пользователь на сервере
+        socket.emit("check_user", { userId: userId });
+
+        // Если пользователь существует, скрываем инпут и кнопку
+        socket.on("user_exists", function (user) {
+          document.getElementById("nickname").style.display = "none";
+          document.getElementById("join").style.display = "none";
+          // Вызываем join для установки ника
+          socket.emit("join", { userId: userId, nickname: user.nickname });
+        });
+
+        // Если пользователя не существует, показываем поле для ввода никнейма
+        socket.on("user_not_found", function () {
+          document.getElementById("nickname").style.display = "inline";
+          document.getElementById("join").style.display = "inline";
+        });
+      }
+      show_or_hide_log_in();
+
+      document.getElementById("join").addEventListener("click", function () {
+        const nickname = document.getElementById("nickname").value;
+        if (nickname) {
+          socket.emit("join", { userId: userId, nickname: nickname });
+          document.getElementById("nickname").style.display = "none";
+          document.getElementById("join").style.display = "none";
+        }
+      });
+
+      // Обновление клиента
+      socket.on("update_user_list", function (users) {
+        const usersDiv = document.getElementById("users").querySelector(".row");
+        usersDiv.innerHTML = ""; // Очищаем содержимое
+
+        if (Object.keys(users).length === 0) {
+          usersDiv.innerHTML += "<p>No users connected</p>";
+        } else {
+          for (const [id, userData] of Object.entries(users)) {
+            // Проверяем, должен ли этот пользователь подсвечиваться (если у него ход)
+            const userCardStyle = userData.show_next_button
+              ? "background-color: #a8caea;"
+              : "";
+
+            // Если это текущий пользователь (тот, кто зашёл), показываем "?" или " " в зависимости от того, есть ли у него текст
+            const displayedText =
+              id === userId
+                ? userData.text
+                  ? "Who is me?"
+                  : " "
+                : userData.text; // Для других пользователей отображаем их текст
+
+            // Поле для редактирования своих слов всегда заблокировано, а для чужих — доступно
+            const inputDisabled = id === userId ? "disabled" : "";
+
+            // Добавляем карточку пользователя
+            usersDiv.innerHTML += `
+        <div class="col-12 col-md-6 col-lg-4 mb-3">
+          <div class="user-card border rounded p-3" style="${userCardStyle}">
+            <strong>${userData.nickname}:</strong>
+            <input type="text" id="input-${id}" 
+                   value="${displayedText}" 
+                   ${inputDisabled}
+                   class="form-control"
+                   oninput="handleInputChange('${id}')"/>
+            <div class="d-flex justify-content-between mt-2">
+              ${
+                userData.show_next_button && id === userId
+                  ? `<a class="next-button btn btn-dark">End Turn</a>`
+                  : ""
+              }
+              ${
+                id === userId
+                  ? `<a class="btn ml-auto" onclick="logout('${id}')">Logout</a>`
+                  : ""
+              }
+            </div>
+          </div>
+        </div>`;
+          }
+
+          // Обработчик клика по ссылке "End Turn"
+          const nextButtons = document.querySelectorAll(".next-button");
+          nextButtons.forEach((button) => {
+            button.addEventListener("click", function () {
+              socket.emit("end_turn", userId); // Завершаем ход текущего пользователя
+            });
+          });
+        }
+      });
+
+      // Обработчик события для кнопки "End Turn"
+      document
+        .getElementById("users")
+        .addEventListener("click", function (event) {
+          if (event.target.classList.contains("next-button")) {
+            socket.emit("end_turn", userId); // Завершаем ход текущего пользователя
+          }
+        });
+
+      // Обработчик события удаление всех игроков
+      document
+        .getElementById("clear-users")
+        .addEventListener("click", function () {
+          socket.emit("clear_users"); // Отправляем запрос на очистку пользователей
+        });
+
+      function handleEndTurn() {
+        socket.emit("end_turn", userId); // Завершаем ход текущего пользователя
+      }
+
+      // Обновление следующего пользователя
+      socket.on("next_user", function (nextUser) {
+        const currentUserId = localStorage.getItem("userId");
+        if (nextUser) {
+          const isCurrentUser = nextUser.id === currentUserId; // Сравниваем с текущим пользователем
+          if (isCurrentUser) {
+            document.getElementById("next-button").style.display = "block"; // Отобразить кнопку
+          } else {
+            document.getElementById("next-button").style.display = "none"; // Скрыть кнопку
+          }
+        }
+      });
+
+      function handleInputChange(userId) {
+        const textInput = document.getElementById(`input-${userId}`);
+        const text = textInput.value;
+        if (text && userId !== localStorage.getItem("userId")) {
+          clearTimeout(window[`timeout-${userId}`]);
+          window[`timeout-${userId}`] = setTimeout(() => {
+            socket.emit("update_text", { userId: userId, text: text });
+          }, 3000);
+        }
+      }
+
+      function logout(userId) {
+        socket.emit("remove_user", userId);
+        // Не удаляем userId из localStorage, просто вызываем функцию обновления
+        show_or_hide_log_in();
+        socket.emit("request_user_list"); // Запрашиваем обновленный список пользователей
+      }
+
+      // Запрос на обновление списка пользователей при загрузке
+      socket.emit("request_user_list");
+    </script>
+  </body>
+</html>
